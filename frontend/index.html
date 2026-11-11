@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StreamSphere PoC — Catalog</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <div class="nav">
+      <div class="brand">Stream<span>Sphere</span> PoC</div>
+      <div class="nav-actions">
+        <span id="who" class="muted"></span>
+        <a class="btn secondary" href="/admin" id="admin-link" hidden>Admin</a>
+        <button class="btn secondary" id="logout-btn">Logout</button>
+      </div>
+    </div>
+
+    <div class="hero">
+      <h1>Movie discovery prototype</h1>
+      <p>
+        Recommendations join PostgreSQL genre preferences with MongoDB movie metadata
+        using a shared <code>movie_id</code> — the PoC proof of polyglot persistence.
+      </p>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="recs">Recommendations</button>
+      <button class="tab" data-tab="catalog">Catalog</button>
+      <button class="tab" data-tab="history">History</button>
+    </div>
+
+    <div id="status" class="banner">Loading…</div>
+
+    <section id="recs" class="panel">
+      <h2>Personalized recommendations</h2>
+      <p class="muted" id="rec-meta"></p>
+      <div id="recs-grid" class="grid"></div>
+    </section>
+
+    <section id="catalog" class="panel hidden">
+      <h2>MongoDB catalog</h2>
+      <div id="catalog-grid" class="grid"></div>
+    </section>
+
+    <section id="history" class="panel hidden">
+      <h2>Viewing history (PostgreSQL + MongoDB titles)</h2>
+      <div id="history-list"></div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script>
+    const user = StreamSphere.requireAuth();
+    if (!user) throw new Error("auth required");
+
+    document.getElementById("who").textContent = `${user.username} (${user.role})`;
+    document.getElementById("logout-btn").onclick = () => StreamSphere.logout();
+    if (user.role === "Admin") {
+      document.getElementById("admin-link").hidden = false;
+    }
+
+    document.querySelectorAll(".tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+        tab.classList.add("active");
+        ["recs", "catalog", "history"].forEach((id) => {
+          document.getElementById(id).classList.toggle("hidden", id !== tab.dataset.tab);
+        });
+      });
+    });
+
+    async function load() {
+      const status = document.getElementById("status");
+      try {
+        const [me, recs, movies, history] = await Promise.all([
+          StreamSphere.api("/api/me"),
+          StreamSphere.api(`/api/users/${user.user_id}/recommendations`),
+          StreamSphere.api("/api/movies"),
+          StreamSphere.api(`/api/users/${user.user_id}/history`),
+        ]);
+
+        status.textContent =
+          `Health path ready · prefs: ${(me.preferred_genres || []).join(", ") || "none"} · ` +
+          `recommendations computed in ${recs.elapsed_ms} ms`;
+
+        document.getElementById("rec-meta").textContent = recs.method;
+        document.getElementById("recs-grid").innerHTML = recs.results
+          .map((m) => StreamSphere.movieCard(m, `
+            <button class="btn" onclick="rateMovie(${m.movie_id})">Rate 5★</button>
+            <button class="btn secondary" onclick="watchMovie(${m.movie_id})">Mark watched</button>
+          `))
+          .join("") || "<p class='muted'>No recommendations yet.</p>";
+
+        document.getElementById("catalog-grid").innerHTML = movies
+          .map((m) => StreamSphere.movieCard(m, `
+            <button class="btn secondary" onclick="watchMovie(${m.movie_id})">Mark watched</button>
+          `))
+          .join("");
+
+        document.getElementById("history-list").innerHTML = `
+          <table class="table">
+            <thead><tr><th>When</th><th>Movie ID</th><th>Title</th><th>Genres</th></tr></thead>
+            <tbody>
+              ${history.map((h) => `
+                <tr>
+                  <td>${new Date(h.watched_at).toLocaleString()}</td>
+                  <td>${h.movie_id}</td>
+                  <td>${h.movie?.title || "(missing MongoDB doc)"}</td>
+                  <td>${(h.movie?.genres || []).join(", ")}</td>
+                </tr>
+              `).join("") || "<tr><td colspan='4'>No history yet.</td></tr>"}
+            </tbody>
+          </table>
+        `;
+      } catch (err) {
+        status.textContent = err.message;
+      }
+    }
+
+    async function watchMovie(movieId) {
+      await StreamSphere.api(`/api/users/${user.user_id}/history`, {
+        method: "POST",
+        body: JSON.stringify({ movie_id: movieId }),
+      });
+      await load();
+    }
+
+    async function rateMovie(movieId) {
+      await StreamSphere.api(`/api/users/${user.user_id}/ratings`, {
+        method: "POST",
+        body: JSON.stringify({ movie_id: movieId, rating: 5 }),
+      });
+      alert("Rating saved in PostgreSQL.");
+    }
+
+    window.watchMovie = watchMovie;
+    window.rateMovie = rateMovie;
+    load();
+  </script>
+</body>
+</html>

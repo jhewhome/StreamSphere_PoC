@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StreamSphere PoC — Login</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="panel login-card">
+      <h1>StreamSphere</h1>
+      <p class="muted">PoC login for polyglot movie discovery (PostgreSQL + MongoDB).</p>
+      <form id="login-form" class="form">
+        <label>
+          Username
+          <input name="username" value="viewer1" required>
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" value="viewer123" required>
+        </label>
+        <button class="btn" type="submit">Sign in</button>
+        <p id="error" class="error hidden"></p>
+      </form>
+      <div class="banner" style="margin-top:1rem">
+        Demo accounts:<br>
+        <strong>admin / admin123</strong> (Admin)<br>
+        <strong>viewer1 / viewer123</strong> (Viewer)
+      </div>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+  <script>
+    if (StreamSphere.getToken()) {
+      window.location.href = "/";
+    }
+
+    document.getElementById("login-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      const errorEl = document.getElementById("error");
+      errorEl.classList.add("hidden");
+      try {
+        const data = await StreamSphere.api("/api/login", {
+          method: "POST",
+          body: JSON.stringify({
+            username: form.get("username"),
+            password: form.get("password"),
+          }),
+        });
+        StreamSphere.setSession(data.access_token, data.user);
+        window.location.href = data.user.role === "Admin" ? "/admin" : "/";
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.classList.remove("hidden");
+      }
+    });
+  </script>
+</body>
+</html>

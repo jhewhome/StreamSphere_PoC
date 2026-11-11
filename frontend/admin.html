@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StreamSphere PoC — Admin</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <div class="nav">
+      <div class="brand">Stream<span>Sphere</span> Admin</div>
+      <div class="nav-actions">
+        <a class="btn secondary" href="/">Catalog</a>
+        <button class="btn secondary" id="logout-btn">Logout</button>
+      </div>
+    </div>
+
+    <div class="banner" id="status">Admin controls for external search/import and audit logs.</div>
+
+    <div class="grid" style="grid-template-columns: 1.2fr 1fr; align-items: start;">
+      <section class="panel">
+        <h2>External / local movie search</h2>
+        <form id="search-form" class="form">
+          <label>
+            Query
+            <input name="q" placeholder="e.g. Inception" required>
+          </label>
+          <button class="btn" type="submit">Search</button>
+        </form>
+        <div id="search-results" style="margin-top:1rem"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Manual metadata import</h2>
+        <form id="manual-form" class="form">
+          <label>Title <input name="title" required></label>
+          <label>Genres (comma-separated) <input name="genres" placeholder="Action, Science Fiction"></label>
+          <label>Year <input name="release_year" type="number"></label>
+          <label>Description <textarea name="description" rows="3"></textarea></label>
+          <button class="btn" type="submit">Save to MongoDB</button>
+        </form>
+      </section>
+    </div>
+
+    <section class="panel" style="margin-top:1rem">
+      <div class="nav-actions" style="justify-content:space-between; margin-bottom:0.75rem">
+        <h2 style="margin:0">Audit logs (PostgreSQL)</h2>
+        <button class="btn secondary" id="refresh-audit">Refresh</button>
+      </div>
+      <div id="audit"></div>
+    </section>
+
+    <section class="panel" style="margin-top:1rem">
+      <div class="nav-actions" style="justify-content:space-between; margin-bottom:0.75rem">
+        <h2 style="margin:0">Polyglot proof endpoint</h2>
+        <button class="btn secondary" id="proof-btn">Run proof</button>
+      </div>
+      <pre id="proof" class="muted" style="white-space:pre-wrap"></pre>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script>
+    const user = StreamSphere.requireAuth("Admin");
+    if (!user) throw new Error("admin required");
+    document.getElementById("logout-btn").onclick = () => StreamSphere.logout();
+
+    async function loadAudit() {
+      const logs = await StreamSphere.api("/api/admin/audit-logs?limit=30");
+      document.getElementById("audit").innerHTML = `
+        <table class="table">
+          <thead><tr><th>When</th><th>User</th><th>Action</th><th>Details</th></tr></thead>
+          <tbody>
+            ${logs.map((l) => `
+              <tr>
+                <td>${new Date(l.created_at).toLocaleString()}</td>
+                <td>${l.user_id ?? "-"}</td>
+                <td>${l.action}</td>
+                <td>${l.details || ""}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    document.getElementById("refresh-audit").onclick = () => loadAudit().catch(showError);
+    document.getElementById("proof-btn").onclick = async () => {
+      try {
+        const data = await StreamSphere.api("/api/admin/polyglot-proof");
+        document.getElementById("proof").textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        showError(err);
+      }
+    };
+
+    document.getElementById("search-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const q = new FormData(event.target).get("q");
+      try {
+        const data = await StreamSphere.api(`/api/admin/movie-search?q=${encodeURIComponent(q)}`);
+        document.getElementById("status").textContent = `Search source: ${data.source}. ${data.note || ""}`;
+        document.getElementById("search-results").innerHTML = (data.results || []).map((item) => `
+          <div class="card" style="margin-bottom:0.75rem">
+            <div class="card-body">
+              <h3>${item.title}</h3>
+              <div class="meta">${item.release_year || item.tmdb_id || ""}</div>
+              <p class="muted">${(item.description || "").slice(0, 140)}</p>
+              ${item.tmdb_id ? `<button class="btn" onclick="importTmdb(${item.tmdb_id})">Import from TMDB</button>` : ""}
+            </div>
+          </div>
+        `).join("") || "<p class='muted'>No results.</p>";
+      } catch (err) {
+        showError(err);
+      }
+    });
+
+    document.getElementById("manual-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      const genres = String(form.get("genres") || "")
+        .split(",")
+        .map((g) => g.trim())
+        .filter(Boolean);
+      try {
+        const saved = await StreamSphere.api("/api/admin/movies/import", {
+          method: "POST",
+          body: JSON.stringify({
+            title: form.get("title"),
+            genres,
+            release_year: form.get("release_year") ? Number(form.get("release_year")) : null,
+            description: form.get("description"),
+          }),
+        });
+        document.getElementById("status").textContent = `Saved movie_id=${saved.movie_id} to MongoDB.`;
+        event.target.reset();
+        await loadAudit();
+      } catch (err) {
+        showError(err);
+      }
+    });
+
+    async function importTmdb(tmdbId) {
+      try {
+        const saved = await StreamSphere.api("/api/admin/movies/import", {
+          method: "POST",
+          body: JSON.stringify({ tmdb_id: tmdbId }),
+        });
+        document.getElementById("status").textContent = `Imported ${saved.title} as movie_id=${saved.movie_id}.`;
+        await loadAudit();
+      } catch (err) {
+        showError(err);
+      }
+    }
+
+    function showError(err) {
+      document.getElementById("status").textContent = err.message || String(err);
+    }
+
+    window.importTmdb = importTmdb;
+    loadAudit().catch(showError);
+  </script>
+</body>
+</html>
