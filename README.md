@@ -2,6 +2,8 @@
 
 Proof of Concept for **MSIT 620 — Advanced Organization of Database** Group 3.
 
+**GitHub:** https://github.com/jhewhome/StreamSphere_PoC
+
 This prototype validates selected StreamSphere TO-BE data architecture decisions:
 
 1. **Polyglot persistence** — PostgreSQL (users, preferences, history, ratings, audit) + MongoDB (movie metadata), joined by `movie_id`
